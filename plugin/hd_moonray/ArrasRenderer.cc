@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ArrasRenderer.h"
+
+#include "pxr/pxr.h"
+#include "pxr/base/tf/errorMark.h"
 #include <hydramoonray/RenderSettings.h>
 #include <hydramoonray/HdmLog.h>
 
@@ -265,6 +268,26 @@ void
 ArrasRenderer::exceptionHandler(const std::exception& e)
 {
     Logger::error(e.what());
+    setFrameFailure(e.what());
+}
+
+void
+ArrasRenderer::setFrameFailure(const std::string& reason)
+{
+    std::lock_guard<std::mutex> lock(mFailureMutex);
+    if (mFailureReason.empty()) {
+        mFailureReason = reason;
+    }
+    // Publish only after the reason is available to the recording thread.
+    mFrameFailed = true;
+    Logger::error("Moonray: the frame in flight cannot finish: ", reason);
+}
+
+std::string
+ArrasRenderer::getFailureReason() const
+{
+    std::lock_guard<std::mutex> lock(mFailureMutex);
+    return mFailureReason;
 }
 
 void
@@ -283,6 +306,11 @@ ArrasRenderer::statusHandler(const std::string& msg)
                               (stopReason.isString() ? stopReason.asString() : msg));
                 mConnected = false;
                 mStatusString = "Disconnected";
+                // Only a frame that is still in flight needs failing; a session
+                // stopped between frames is just a disconnect.
+                if (mUpdateActive || !mFrameComplete) {
+                    setFrameFailure(stopReason.isString() ? stopReason.asString() : msg);
+                }
                 return;
             }
         }
@@ -311,6 +339,21 @@ ArrasRenderer::allocate(MoonrayOutput output, PixelData& pd, const PixelSize& re
 bool
 ArrasRenderer::resolve(MoonrayOutput output, PixelData& pd, bool forceUpdate)
 {
+    if (mFrameFailed) {
+        // Report it here, on the thread driving the recorder, for two reasons.
+        // A posted diagnostic does not unwind C++, so raising alone would leave
+        // that loop spinning: the frame is completed as well, which is what lets
+        // it exit. And the error has to be posted on this thread to land in the
+        // diagnostic context usdrecord checks when Record() returns, which is
+        // what turns it into a reported failure instead of a silent hang.
+        TF_RUNTIME_ERROR("Moonray: Arras session stopped during rendering (%s)",
+                         getFailureReason().c_str());
+        mFrameFailed = false;  // report once, not on every resolve
+        mUpdateActive = false; // isFrameComplete() needs no active update ...
+        mFrameComplete = true; // ... and a complete frame
+        return false;
+    }
+
     // mProgress < 0 indicates that mFbReceiver hasn't received any images yet,
     if (mProgress < 0) return false;
 
