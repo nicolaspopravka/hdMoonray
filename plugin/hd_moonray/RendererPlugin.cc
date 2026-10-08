@@ -36,11 +36,18 @@ public:
     }
 
 #if HD_API_VERSION >= 97
+// USD 26.08 removed the container-handle overload from HdRendererPlugin
+// (its pure virtual became the HdRendererCreateArgsSchema one, which the
+// HdRendererCreateArgs override below still satisfies); keeping this
+// declaration there would break the `override` on 26.08 while 26.03/26.05
+// need it as an available (non-pure) virtual.
+#if PXR_VERSION < 2608
     bool IsSupported(
         HdContainerDataSourceHandle const &rendererCreateArgs,
         std::string *reasonWhyNot = nullptr) const override {
         return true;
     }
+#endif
 
     bool IsSupported(
         HdRendererCreateArgs const &rendererCreateArgs,
