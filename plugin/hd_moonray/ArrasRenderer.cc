@@ -4,6 +4,7 @@
 #include "ArrasRenderer.h"
 
 #include "pxr/pxr.h"
+#include "pxr/base/tf/diagnostic.h"
 #include "pxr/base/tf/errorMark.h"
 #include <hydramoonray/RenderSettings.h>
 #include <hydramoonray/HdmLog.h>
@@ -346,6 +347,14 @@ ArrasRenderer::resolve(MoonrayOutput output, PixelData& pd, bool forceUpdate)
         // it exit. And the error has to be posted on this thread to land in the
         // diagnostic context usdrecord checks when Record() returns, which is
         // what turns it into a reported failure instead of a silent hang.
+        //
+        // The USD 26.08 namespace migration removed the file-scope
+        // PXR_NAMESPACE_USING_DIRECTIVE, so TF_RUNTIME_ERROR is not in scope
+        // here. It is a no-op on USD builds configured with PXR_USE_NAMESPACES
+        // off, and a `using namespace PXR_NS` otherwise, so pulling it in for
+        // this call only keeps the rest of the file unqualified as that
+        // migration intended.
+        PXR_NAMESPACE_USING_DIRECTIVE
         TF_RUNTIME_ERROR("Moonray: Arras session stopped during rendering (%s)",
                          getFailureReason().c_str());
         mFrameFailed = false;  // report once, not on every resolve
